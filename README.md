@@ -1,42 +1,77 @@
 # GOTA n8n
 
-Automação comercial da Agência Gota para prospecção de negócios locais sem site.
+Automação comercial da Agência Gota para prospecção de negócios locais sem site e atendimento via WhatsApp/IA.
 
-## Objetivo
+## Arquitetura atual
 
-Executar diariamente às 09:00, buscar negócios locais no Google Maps via SerpApi, continuar pesquisando até acumular até 8 leads novos sem site e com telefone, remover duplicados usando o CRM e registrar os leads no Google Sheets. Em seguida, o projeto será conectado ao WhatsApp e à IA comercial para conduzir a conversa até uma reunião.
+O projeto está separado em dois workflows principais:
 
-## Estrutura
+1. **Prospector** — busca, análise, qualificação, fila FIFO e primeiro contato.
+2. **Atendimento** — recebe respostas do WhatsApp, consulta histórico, usa IA, atualiza CRM e trata reunião/opt-out.
 
-- `workflows/01-captura-leads.json` — captura automática de até 8 leads + deduplicação + gravação no CRM.
-- `workflows/02-inbound-base-atual.json` — base atual do fluxo de respostas recebidas via WhatsApp/IA; ainda precisa de correções e conexões.
-- `docs/arquitetura.md` — desenho do sistema e regras.
-- `config/env.example` — nomes das credenciais/variáveis necessárias.
-- `.gitignore` — bloqueia arquivos locais de segredo.
+O setup da Evolution/QR fica fora do fluxo agendado.
+
+## Workflow 01 — Prospector
+
+Fonte de verdade operacional: workflow live no n8n `GOTA - 01 PROSPECTOR - FINAL`.
+
+Regras:
+
+- segunda a sexta às 09:00;
+- analisar até 50 negócios novos/dia;
+- busca em lotes de até 20, normalmente até 3 consultas/dia;
+- registrar todos os negócios novos em `LEADS`;
+- sem site + telefone -> validar WhatsApp;
+- WhatsApp válido -> `qualified_pending`;
+- fila FIFO;
+- no máximo 8 primeiros contatos/dia;
+- se houver 1 lead disponível, envia 1;
+- envio confirmado -> `contacted`;
+- falha -> permanece pendente + `ERROR_LOG`;
+- reexecução no mesmo dia não pode ultrapassar o limite diário de 8;
+- se a SerpApi ficar sem cota, novas buscas param até a renovação, mas a fila existente continua utilizável.
+
+O JSON antigo `workflows/01-captura-leads.json` foi removido porque não representava mais a arquitetura atual. Após o teste real com WhatsApp, o JSON final deve ser exportado do n8n e versionado aqui.
+
+## Workflow 02 — Atendimento
+
+`workflows/02-inbound-base-atual.json` ainda é uma base histórica e não deve ser considerado pronto para produção.
+
+O fluxo final de atendimento será:
+
+`mensagem recebida -> identificar lead -> salvar inbound -> carregar histórico -> IA -> opt-out/reunião/interesse -> enviar resposta -> salvar outbound -> atualizar CRM`
+
+## CRM
+
+Planilha: `CRM Comercial - Agência Gota`.
+
+Base operacional única: `LEADS`.
+
+Abas auxiliares: `CONFIG`, `CONVERSATIONS`, `MEETINGS`, `SUPPRESSION`, `DAILY_METRICS`, `ERROR_LOG`.
+
+Não criar uma base paralela no MVP.
+
+## Infraestrutura
+
+- n8n Cloud: orquestração.
+- SerpApi: Google Maps.
+- Evolution API no Render: ponte com WhatsApp.
+- Supabase/Postgres: persistência da Evolution.
+- Google Sheets: CRM e métricas.
 
 ## Segurança
 
-Nenhuma chave de API deve ser commitada neste repositório. SerpApi, Evolution API, Google Sheets e OpenAI devem ficar em Credentials do n8n.
+Nenhuma API key, senha ou token deve ser commitado neste repositório. Segredos ficam nas Credentials do n8n ou nas variáveis de ambiente dos serviços.
+
+O primeiro contato por WhatsApp deve respeitar `SUPPRESSION`, opt-out e o limite operacional configurado.
 
 ## Estado atual
 
-1. Repositório inicializado e versionado.
-2. Captura automática às 09:00 criada.
-3. O workflow percorre diferentes segmentos/regiões e para ao chegar em 8 leads ou ao esgotar as buscas da execução.
-4. O filtro exige telefone, ausência de website e ausência de duplicidade no CRM.
-5. Os leads aprovados são gravados na aba `LEADS` com estratégia `site_first`.
-6. A primeira mensagem já é preparada no campo `_message`, mas o disparo de WhatsApp será conectado em um workflow separado para facilitar testes e segurança.
-7. O workflow inbound anterior foi preservado como base e ainda não está pronto para produção.
-
-## Próximos passos
-
-1. Importar `workflows/01-captura-leads.json` no n8n.
-2. Vincular Google Sheets e SerpApi nas Credentials do n8n.
-3. Testar a captura manualmente e validar os 8 leads no CRM.
-4. Criar `02-outbound-whatsapp.json` para disparar os leads aprovados.
-5. Corrigir e finalizar o inbound/IA.
-6. Conectar agendamento e atualização do CRM.
-
-## Regra operacional desejada
-
-`09:00 -> buscar -> sem site? -> com telefone? -> já existe no CRM? -> acumular até 8 -> salvar CRM -> WhatsApp -> resposta -> IA -> reunião`
+- planilha preparada para a nova etapa;
+- `DAILY_ANALYSIS_LIMIT = 50`;
+- `DAILY_OUTREACH_LIMIT = 8`;
+- Prospector live executou sem quebrar e gravou negócios na planilha;
+- último teste analisou 20 negócios e encontrou 12 sem site;
+- ainda é necessário corrigir/testar o ciclo de busca para completar até 50 quando houver cota;
+- Evolution API está implantada e persistindo em Supabase;
+- falta parear a instância `gota` com o WhatsApp e executar o primeiro disparo real controlado.
