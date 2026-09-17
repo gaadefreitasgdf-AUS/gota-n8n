@@ -1,48 +1,95 @@
-# Arquitetura — GOTA Prospector
+# Arquitetura — GOTA Comercial
 
-## Fluxo principal
+## Visão geral
 
-`09:00 -> busca -> filtra sem site -> valida telefone/WhatsApp -> remove duplicados -> acumula até 8 -> CRM -> primeiro contato -> resposta -> IA -> reunião`
+A automação é dividida em dois workflows independentes.
 
-## Critérios mínimos do lead
+### 01 — Prospector
 
-- empresa local
-- sem site próprio identificado
-- telefone válido
-- ainda não existente no CRM
-- WhatsApp confirmado quando possível
+`SEG-SEX 09:00 -> ler CONFIG/CRM -> consultar cota SerpApi -> analisar até 50 negócios novos -> registrar LEADS -> identificar sem site -> validar WhatsApp -> qualified_pending -> FIFO -> até 8 primeiros contatos -> CRM/CONVERSATIONS/ERROR_LOG -> DAILY_METRICS`
+
+### 02 — Atendimento
+
+`WhatsApp respondeu -> webhook -> normalizar telefone -> identificar lead -> CONVERSATIONS inbound -> carregar histórico -> IA -> atualizar CRM -> opt-out/reunião/interesse -> responder -> CONVERSATIONS outbound`
+
+O setup/QR da Evolution é uma operação de infraestrutura e não faz parte do workflow agendado.
+
+## Regras do Prospector
+
+- Agenda: segunda a sexta às 09:00 em `America/Sao_Paulo`.
+- Limite de análise: 50 negócios novos por dia.
+- Lote de busca: 20 resultados; normalmente até 3 consultas por dia.
+- Limite de primeiro contato: 8 por dia.
+- Não existe mínimo de lote: 1 lead disponível pode receber 1 envio.
+- Todos os negócios novos analisados são registrados em `LEADS`.
+- Site próprio identificado -> `analyzed`, sem abordagem de criação de site.
+- Sem site + telefone -> `awaiting_whatsapp_validation`.
+- WhatsApp válido -> `qualified_pending`.
+- Fila FIFO por entrada/qualificação; sem ranking para decidir quem sai primeiro.
+- Somente envio confirmado muda o lead para `contacted`.
+- Falha de envio não marca contato; registra `ERROR_LOG` e mantém o lead disponível para nova tentativa.
+- `SUPPRESSION` e opt-out prevalecem sempre.
+- Uma reexecução no mesmo dia deve calcular os slots restantes para nunca passar de 8 primeiros contatos.
+- Se a cota SerpApi estiver zerada, a busca é pausada até a renovação; a fila já existente pode continuar sendo processada.
+
+## Critério de site
+
+Links de rede social ou plataforma de perfil/agendamento não contam como site próprio para a oferta principal. Exemplos: Instagram, Facebook, Linktree, Booksy e páginas equivalentes.
 
 ## CRM
 
-O CRM atual é um Google Sheets com abas de configuração, leads, conversas e métricas. O workflow deve reutilizar essa estrutura em vez de criar outro banco no MVP.
+Google Sheets `CRM Comercial - Agência Gota` é a base do MVP.
 
-## Prospecção
+Base operacional: `LEADS`.
 
-O alvo diário é 8 novos leads válidos. A busca pode continuar por múltiplos termos/regiões até atingir 8, respeitando limites de segurança de cota e repetição.
+Abas usadas:
+
+- `CONFIG`
+- `LEADS`
+- `CONVERSATIONS`
+- `MEETINGS`
+- `SUPPRESSION`
+- `DAILY_METRICS`
+- `ERROR_LOG`
+
+Não criar uma segunda base de leads.
+
+## Métricas operacionais
+
+`DAILY_METRICS` registra também:
+
+- businesses_analyzed
+- no_site_found
+- whatsapp_valid
+- queue_pending
+- serpapi_queries_used
+- serpapi_queries_remaining
+- serpapi_renewal_date
+- whatsapp_state
+- run_status
+
+## Evolution API
+
+Instância: `gota`.
+
+A Evolution no Render usa Supabase/Postgres para persistência. O Prospector utiliza a Evolution para checar conexão, validar números e enviar o primeiro contato.
+
+A instância deve ser pareada uma única vez via QR/pairing e reutilizada. Não criar nova instância em cada execução.
 
 ## Primeiro contato
 
-Mensagem inicial curta:
+Mensagem curta:
 
 `Oi, tudo bem? Falo com o responsável pela [EMPRESA]?`
 
-Após resposta, a IA apresenta a Gota e prioriza criação de site. Gestão de redes sociais entra como oferta secundária.
-
-## IA comercial
-
-A IA deve atualizar, no mínimo:
-
-- interest_level
-- wants_meeting
-- is_opt_out
-- main_pain
-- objection
-- conversation_summary
+A apresentação comercial completa ocorre somente após resposta e será responsabilidade do Workflow 02 — Atendimento.
 
 ## Segurança operacional
 
-- DRY RUN antes de liberar envio real
-- sem segredos no GitHub
-- evitar duplicidade de empresa/telefone
-- registrar opt-out e impedir novo contato
-- limitar volume diário
+- manter `DRY_RUN = TRUE` durante testes;
+- virar `FALSE` apenas no teste real controlado;
+- sem segredos no GitHub;
+- deduplicar por identificadores estáveis/telefone/empresa;
+- bloquear opt-outs e SUPPRESSION;
+- limitar volume diário;
+- registrar falhas sem repetir mensagens cegamente.
